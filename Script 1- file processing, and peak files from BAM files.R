@@ -1,6 +1,6 @@
+#Perform a quality check of the FASTQ files with FastQC (external, Python)
+
 setwd("D:/ATAC-seq")
-
-
 #Reading raw chip-seq data
 library(ShortRead)
 fqSample <- FastqSampler("D:/ATAC-seq/SRR891269_1.fastq.gz", n = 10^6)
@@ -550,5 +550,6 @@ CTCF_Cuts_open <- regionPlot(cutsCoverage20, testRanges = toCompare, style = "po
                              format = "rlelist", distanceAround = 500)
 plotRegion(CTCF_Cuts_open, outliers = 0.001) + ggtitle("NucFree Cuts Centred on CTCF") +
   theme_bw()
+
 
 

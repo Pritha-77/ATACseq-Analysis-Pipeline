@@ -100,10 +100,13 @@ id(read1)[1:2]
 #Aligning with Rsubread
 
 Rsubread::align(index = "BSgenome.Hsapiens.UCSC.hg38.mainChrs",
-                readfile1 = readfile1,
-                readfile2 = readfile2,
+                readfile1 = read1,
+                readfile2 = read2,
                 output_file = "ATAC_50K_2.bam",
                 nthreads = 4, type = 1, unique = TRUE, maxFragLength = 2000)
+
+# type = 1 means genomic DNA-seq, whereas type = 0/"rna" is RNA-seq
+# Rsubread's default paired-end maximum fragment length is 600 bp
 
 
 bam.files <- list.files(pattern = ".BAM$", full.names = TRUE) 

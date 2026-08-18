@@ -143,7 +143,6 @@ ggplot(mappedReads, aes(seqnames, mapped, fill = seqnames)) + geom_bar(stat = "i
 #   - adapter/technical problems
 #   - poor alignment parameters
 
-
 # ============================================================
 # MITOCHONDRIAL READ QC
 # ============================================================
@@ -168,32 +167,6 @@ mitochondrial_fraction <- (
 
 mitochondrial_fraction
 
-# ------------------------------------------------------------
-# OPTIONAL: remove chrM reads
-# ------------------------------------------------------------
-# Use this when the downstream analysis focuses on nuclear chromatin accessibility.
-samtools view -b \
-  -o Sorted_ATAC_50K_2_noChrM.bam \
-  Sorted_ATAC_50K_2.bam \
-  chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY
-samtools sort \
-  -o Sorted_ATAC_50K_2_noChrM_sorted.bam \
-  Sorted_ATAC_50K_2_noChrM.bam
-
-samtools index Sorted_ATAC_50K_2_noChrM_sorted.bam
-
-library(Rsamtools)
-
-mappedReads_noChrM <- idxstatsBam(
-    "Sorted_ATAC_50K_2_noChrM_sorted.bam"
-)
-
-mappedReads_noChrM[
-    mappedReads_noChrM$seqnames == "chrM",
-]
-# For large BAM files, use samtools or another BAM filtering
-# approach rather than loading the entire BAM into memory.
-
 #____________Post-alignment processing______________#
 ## Proper pairs ##
 # ATAC-seq fragment analyses generally use properly paired reads.
@@ -202,14 +175,21 @@ mappedReads_noChrM[
 #
 # Then use properly paired fragments for downstream
 # fragment-based analyses.
-library(GenomicAlignments)                    
-flags = scanBamFlag(isProperPair = TRUE)
-myParam = ScanBamParam(flag = flags, what = c("qname", "mapq", "isize"), which = GRanges("chr20",
-                                                                                         IRanges(1, 63025520)))
-myParam
+library(GenomicAlignments)
 
-sortedBAM <- "Sorted_ATAC_50K_2.bam"
-atacReads <- readGAlignmentPairs(sortedBAM, param = myParam)
+flags <- scanBamFlag(isProperPair = TRUE)
+
+myParam <- ScanBamParam(
+    flag = flags,
+    what = c("qname", "mapq", "isize")
+)
+
+atacReads <- readGAlignmentPairs(
+    "Sorted_ATAC_50K_2.bam",
+    param = myParam
+)
+
+length(atacReads)
 class(atacReads)
 
 # GAlignmentPairs
@@ -218,7 +198,6 @@ atacReads[1:2, ]
 read1 <- first(atacReads)
 read2 <- second(atacReads)
 read2[1, ]
-
 
 # ============================================================
 # MAPQ QC + OPTIONAL FILTERING
@@ -387,7 +366,19 @@ openRegionRPMBigWig <- gsub("\\.bam", "_openRegionRPM\\.bw", sortedBAM)
 myCoverage <- coverage(atacFragments, weight = (10^6/length(atacFragments)))
 export.bw(myCoverage, openRegionRPMBigWig)
 
+# Create FINAL BAM
+samtools view -b -f 2 -q 30 \
+  Sorted_ATAC_50K_2.bam \
+  chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 \
+  chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 \
+  chr21 chr22 chrX chrY \
+  > ATAC_50K_2_final_filtered.bam
 
+ samtools sort \
+  -o Sorted_ATAC_50K_2_final_filtered.bam \
+  ATAC_50K_2_final_filtered.bam
+
+                     
 #__________________ ATACseqQC_________________#
 # Since this can be fairly memory-heavy, I am just illustrating it here on a BAM file containing just the chromosome 17 reads of the ATACseq data
 
@@ -395,7 +386,7 @@ export.bw(myCoverage, openRegionRPMBigWig)
 library(Rsamtools)
 
 # Input BAM file
-input_bam <- "Sorted_ATAC_50K_2.bam"
+input_bam <- "Sorted_ATAC_50K_2_final_filtered.bam"
 output_bam <- "Sorted_ATAC_50K_2_ch17.bam"
 
 # Define region (chr17)
@@ -440,9 +431,8 @@ ATACQC$PCRbottleneckCoefficient_1
 # The "PCRbottleneckCoefficient_2" is our secondary measure of bottlenecking. 
 # It is calculated as the number of positions in the genome with exactly 1 read mapped uniquely compared to the number of positions with exactly 2 reads mapping uniquely.
 # We can reuse our example. If we have 20 reads, 16 of which map uniquely. 4 do not map uniquely; instead, there are 2 locations, both of which have 2 reads. This would lead us to calculate 16/2. We therefore have a PBC2 of 8.
-# ** Values less than 1 indicate severe bottlenecking, between 1 and 3 indicate moderate bottlenecking. Greater than 3 show no bottlenecking.
+# ** Values less than 1 indicate severe bottlenecking; between 1 and 3 indicate moderate bottlenecking. Greater than 3 show no bottlenecking.
 ATACQC$PCRbottleneckCoefficient_2
-
 
 #Plotting signal over regions in R
 BiocManager::install("soGGi")
@@ -485,7 +475,7 @@ tssLocations <- tssLocations[as.numeric(myindex)]
 seqlevels(tssLocations) <- mainChromosomes
 
 library(soGGi)
-sortedBAM <- "Sorted_ATAC_50K_2.bam"
+sortedBAM <- "Sorted_ATAC_50K_2_final_filtered.bam"
 library(Rsamtools)
 # Nucleosome-free
 #bamFile parameter and a GRanges to plot over

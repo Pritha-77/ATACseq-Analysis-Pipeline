@@ -116,11 +116,8 @@ library(Rsamtools)
 sortBam("ATAC_50K_2.bam", "Sorted_ATAC_50K_2")
 indexBam("Sorted_ATAC_50K_2.bam")
 
-
-
-#Distribution of mapped reads
-library(Rsamtools)
-#mappedReads <- idxstatsBam(sortedBAM)
+# Distribution of mapped reads
+# mappedReads <- idxstatsBam(sortedBAM)
 
 mappedReads <- idxstatsBam("Sorted_ATAC_50K_2.bam")
 head(mappedReads)
@@ -130,14 +127,74 @@ library(ggplot2)
 ggplot(mappedReads, aes(seqnames, mapped, fill = seqnames)) + geom_bar(stat = "identity") +
   coord_flip()
 
+# Check:
+#   - Number of mapped reads
+#   - Chromosomal distribution
+#   - Unmapped reads
+#
+# Before filtering:
+#   Examine the overall mapping rate.
+#
+# A very low mapping rate may indicate:
+#   - poor sequence quality
+#   - incorrect reference genome
+#   - contamination
+#   - adapter/technical problems
+#   - poor alignment parameters
+
+
+# ============================================================
+# 5. MITOCHONDRIAL READ QC
+# ============================================================
+# Check the fraction of mapped reads originating from chrM.
+#
+# High mitochondrial content can indicate poor nuclear library
+# complexity.
+#
+# First quantify it.
+# Then decide whether mitochondrial reads should be removed
+# for downstream nuclear ATAC-seq analysis.
+
+chrM_reads <- mappedReads[
+    mappedReads$seqnames == "chrM",
+    "mapped"
+]
+
+total_mapped <- sum(mappedReads$mapped)
+
+mitochondrial_fraction <- (
+    chrM_reads / total_mapped
+) * 100
+
+mitochondrial_fraction
+
+# ------------------------------------------------------------
+# OPTIONAL: remove chrM reads
+# ------------------------------------------------------------
+# Use this when the downstream analysis focuses on nuclear
+# chromatin accessibility.
+param_no_chrM <- ScanBamParam(
+    which = GRanges(
+        setdiff(
+            paste0("chr", c(1:22, "X", "Y")),
+            "chrM"
+        )
+    )
+)
+
+# For large BAM files, use samtools or another BAM filtering
+# approach rather than loading the entire BAM into memory.
+
 #____________Post-alignment processing______________#
-
-#Proper pairs
-
+## Proper pairs ##
+# ATAC-seq fragment analyses generally use properly paired reads.
+#
+# Check the proportion of properly paired reads first.
+#
+# Then use properly paired fragments for downstream
+# fragment-based analyses.
 library(GenomicAlignments)
 flags = scanBamFlag(isProperPair = TRUE)
-
-
 myParam = ScanBamParam(flag = flags, what = c("qname", "mapq", "isize"), which = GRanges("chr20",
                                                                                          IRanges(1, 63025520)))
 myParam
@@ -154,19 +211,31 @@ read2 <- second(atacReads)
 read2[1, ]
 
 
-#Retrieve MapQ scores
+# ============================================================
+# MAPQ QC + OPTIONAL FILTERING
+# ============================================================
+# Check MAPQ distribution before choosing a cutoff.
+#
+# MAPQ represents confidence in read placement.
+#
+# Common starting thresholds:
+#   MAPQ >= 20
+#   MAPQ >= 30
+#
+# The cutoff should depend on the aligner and dataset.
+#
+# Your Rsubread alignment already requests unique mapping,
+# but MAPQ filtering can provide an additional quality filter.
 
+#Retrieve MapQ scores
 read1MapQ <- mcols(read1)$mapq
 read2MapQ <- mcols(read2)$mapq
 read1MapQ[1:2]
-
 #MapQ score frequencies
 read1MapQFreqs <- table(read1MapQ)
 read2MapQFreqs <- table(read2MapQ)
 read1MapQFreqs
 read2MapQFreqs
-
-
 # Plot MapQ scores
 library(ggplot2)
 toPlot <- data.frame(MapQ = c(names(read1MapQFreqs), names(read2MapQFreqs)), Frequency = c(read1MapQFreqs,
@@ -176,9 +245,36 @@ toPlot$MapQ <- factor(toPlot$MapQ, levels = unique(sort(as.numeric(toPlot$MapQ))
 ggplot(toPlot, aes(x = MapQ, y = Frequency, fill = MapQ)) + geom_bar(stat = "identity") +
   facet_grid(~Read)
 
+# Example:
+# Keep fragments where both mates have MAPQ >= 30.
+#
+# NOTE:
+# Apply this only after inspecting the MAPQ distribution.
 
+MAPQ_cutoff <- 30
+
+highQualityPairs <- atacReads[
+    mcols(first(atacReads))$mapq >= MAPQ_cutoff &
+    mcols(second(atacReads))$mapq >= MAPQ_cutoff,
+]
+
+length(atacReads)
+length(highQualityPairs)
+
+# ============================================================
+# FRAGMENT-SIZE QC
+# ============================================================
+# ATAC-seq should show nucleosome-associated periodicity.
+#
+# Expected approximate pattern:
+#
+#   <100 bp        nucleosome-free
+#   ~180–250 bp    mononucleosome
+#   ~300–500 bp    dinucleosome
+#   larger sizes:   higher-order nucleosomes
+#
+# Check the distribution before filtering.
 #Retrieving insert sizes
-
 atacReads_read1 <- first(atacReads)
 insertSizes <- abs(elementMetadata(atacReads_read1)$isize)
 head(insertSizes)
@@ -192,25 +288,36 @@ toPlot <- data.frame(InsertSize = as.numeric(names(fragLenSizes)), Count = as.nu
 fragLenPlot <- ggplot(toPlot, aes(x = InsertSize, y = Count)) + geom_line()
 fragLenPlot + theme_bw()
 
-
-
 fragLenPlot + scale_y_continuous(trans = "log2") + theme_bw()
-
-
 
 fragLenPlot + scale_y_continuous(trans = "log2") + geom_vline(xintercept = c(180,
                                                                              247), colour = "red") + geom_vline(xintercept = c(315, 437), colour = "darkblue") +
   geom_vline(xintercept = c(100), colour = "darkgreen") + theme_bw()
 
-
-
-#Subsetting ATACseq reads by insert sizes
+# ============================================================
+# FRAGMENT-SIZE FILTERING
+# ============================================================
+# These filters are NOT general "bad-read" filters.
+# They separate biological fragment classes.
+#
+# Nucleosome-free:
+#   <100 bp
+#
+# Mononucleosome:
+#   180–240 bp
+#
+# Dinucleosome:
+#   315–437 bp
+#
+# Exact boundaries can be adjusted according to the observed
+# fragment-size distribution.
+# Subsetting ATAC-seq reads by insert sizes
 
 atacReads_NucFree <- atacReads[insertSizes < 100, ]
 atacReads_MonoNuc <- atacReads[insertSizes > 180 & insertSizes < 240, ]
 atacReads_diNuc <- atacReads[insertSizes > 315 & insertSizes < 437, ]
 
-#Creating BAM les split by insert sizes
+#Creating BAM files split by insert sizes
 nucFreeRegionBam <- gsub("\\.bam", "_nucFreeRegions\\.bam", sortedBAM)
 monoNucBam <- gsub("\\.bam", "_monoNuc\\.bam", sortedBAM)
 diNucBam <- gsub("\\.bam", "_diNuc\\.bam", sortedBAM)
@@ -219,30 +326,51 @@ export(atacReads_NucFree, nucFreeRegionBam, format = "bam")
 export(atacReads_MonoNuc, monoNucBam, format = "bam")
 export(atacReads_diNuc, diNucBam, format = "bam")
 
-#Creating fragment GRanges
+# ============================================================
+# DUPLICATE / LIBRARY COMPLEXITY QC
+# ============================================================
+# Assess duplicate fragments.
+#
+# High duplication can indicate:
+#   - excessive PCR amplification
+#   - low library complexity
+#
+# However, duplication should not automatically be interpreted
+# as a reason to discard the library.
 
+# Creating fragment GRanges
 atacReads[1, ]
 
 atacFragments <- granges(atacReads)
 atacFragments[1, ]
 
-#We can use the duplicated() function to identify our non-redundant (non-duplicate) fraction of our full length fragments.
+# We can use the duplicated() function to identify the non-redundant (non-duplicate) fraction of our full length fragments.
 duplicatedFragments <- sum(duplicated(atacFragments))
 totalFragments <- length(atacFragments)
 duplicateRate <- duplicatedFragments/totalFragments
 nonRedundantFraction <- 1 - duplicateRate
 nonRedundantFraction
 
+# ============================================================
+# OPTIONAL DUPLICATE REMOVAL
+# ============================================================
+# Only remove duplicates after evaluating library complexity.
+#
+# For quantitative ATAC-seq analyses, duplicate removal is
+# commonly considered to prevent PCR-amplified fragments from
+# artificially increasing accessibility.
+#
+# Do NOT remove duplicates simply because the duplicate rate
+# is high without checking the overall library quality.
 
 # Creating an open region bigWig
-
 openRegionRPMBigWig <- gsub("\\.bam", "_openRegionRPM\\.bw", sortedBAM)
 myCoverage <- coverage(atacFragments, weight = (10^6/length(atacFragments)))
 export.bw(myCoverage, openRegionRPMBigWig)
 
 
 #__________________ ATACseqQC_________________#
-# Since this can be fairly memory heavy, I am just illustrating it here on a BAM file containing just the chromosome 17 reads of the ATACseq data
+# Since this can be fairly memory-heavy, I am just illustrating it here on a BAM file containing just the chromosome 17 reads of the ATACseq data
 
 # Load required package
 library(Rsamtools)
@@ -260,12 +388,28 @@ filterBam(file = input_bam, destination = output_bam, param = param)
 # Index the new BAM
 indexBam(output_bam)
 
+# ============================================================
+#  PCR BOTTLENECK COEFFICIENT
+# ============================================================
+# Use ATACseqQC to assess library complexity and PCR bottlenecking.
+#
+# Check:
+#   - PCR bottleneck coefficient
+#   - Whether multiple QC metrics agree
+#
+# A poor PBC should be interpreted together with:
+#   - duplicate rate
+#   - sequencing depth
+#   - FRiP
+#   - TSS enrichment
+#   - fragment-size distribution
+
 #BiocManager::install("ATACseqQC")
 library(ATACseqQC)
 ATACQC <- bamQC("Sorted_ATAC_50K_2_ch17.bam")
 names(ATACQC)
 
-#PCR bottleneck coe cients
+#PCR bottleneck coefficients
 ATACQC$PCRbottleneckCoefficient_1
 
 ATACQC$PCRbottleneckCoefficient_1
@@ -275,11 +419,25 @@ ATACQC$PCRbottleneckCoefficient_1
 BiocManager::install("soGGi")
 library(soGGi)
 
+# ============================================================
+# TSS ENRICHMENT QC
+# ============================================================
+# TSS enrichment is a major ATAC-seq library-level QC metric.
+#
+# Check:
+#   - Aggregate signal around TSSs.
+#   - Presence of a clear enrichment peak at the TSS.
+#
+# A weak/flat profile can indicate poor ATAC-seq enrichment.
+#
+# IMPORTANT:
+#   TSS enrichment is primarily used to evaluate the library.
+#   It is not a read-level filtering criterion.
+
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 TxDb.Hsapiens.UCSC.hg38.knownGene
 
-#extract gene locations (TSS to TTS) using the genes() function and our TxDb object.
-
+# Extract gene locations (TSS to TTS) using the genes() function and our TxDb object.
 genesLocations <- genes(TxDb.Hsapiens.UCSC.hg38.knownGene)
 genesLocations
 
@@ -293,13 +451,9 @@ tssLocations <- tssLocations[!is.na(myindex)]
 library(GenomicRanges)
 tssLocations <- keepSeqlevels(tssLocations, mainChromosomes, pruning.mode = "coarse")
 
-
-
-
 myindex <- (match(seqnames(tssLocations), mainChromosomes))
 tssLocations <- tssLocations[as.numeric(myindex)]
 seqlevels(tssLocations) <- mainChromosomes
-
 
 library(soGGi)
 sortedBAM <- "Sorted_ATAC_50K_2.bam"
@@ -316,15 +470,13 @@ class(nucFree)
 plotRegion(nucFree)
 
 
-# Peak calling for nucleosome free regions
-
-# Single-end peak calling (With single-end sequencing from ATACseq we do not know how long the fragments are. To identify open regions therefore requires some different parameters for MACS2 peak calling compared to ChIPseq. One strategy employed is to shift read 5’ ends by -100 and then extend from this by 200bp. Considering the expected size of our nucleosome free fragments this should provide a pile-up over nucelosome regions suitable for MACS2 window size.)
-
+# Peak calling for nucleosome-free regions
+# Single-end peak calling (With single-end sequencing from ATAC-seq, we do not know how long the fragments are. To identify open regions therefore requires some different parameters for MACS2 peak calling compared to ChIPseq. One strategy employed is to shift read 5’ ends by -100 and then extend from this by 200bp. Considering the expected size of our nucleosome free fragments this should provide a pile-up over nucelosome regions suitable for MACS2 window size.)
 
 #MACS2 callpeak -t singleEnd.bam --nomodel --shift -100--extsize 200 --format BAM -g MyGenom
 
 
-#OR (Alternatively for the nucleosome occupied data we can adjust shift and extension to centre the signal on nucleosome centres; nucleosomes wrapped in 147bp of DNA)
+#OR (Alternatively, for the nucleosome-occupied data, we can adjust shift and extension to centre the signal on nucleosome centres; nucleosomes wrapped in 147bp of DNA)
 
 #MACS2 callpeak -t singleEnd.bam --nomodel --shift 37--extsize 73 --format BAM -g MyGenome
 
@@ -340,7 +492,6 @@ macs2 callpeak \
 
 
 #QC
-
 library(ChIPQC)
 library(rtracklayer)
 library(DT)
@@ -351,6 +502,20 @@ blkList <- import.bed("ENCFF356LFX.bed.gz")
 
 openRegionPeaks <- "D:/ATAC-seq/PeakDirectory/ATAC_50K_2/Sorted_ATAC_50K_2_Small_Paired_peaks.narrowPeak"
 
+# ============================================================
+# FRiP QC
+# ============================================================
+# FRiP = Fraction of Reads in Peaks.
+#
+# Check:
+#   - FRiP for every library.
+#   - Relative consistency between biological replicates.
+#
+# Higher FRiP generally indicates stronger enrichment.
+#
+# IMPORTANT:
+#   FRiP is mainly a library-level QC metric.
+#   Do not filter individual reads based on FRiP.
 qcRes <- ChIPQCsample("Sorted_ATAC_50K_2.bam",
                       peaks = openRegionPeaks, annotation = "hg38", blacklist = blkList,
                       verboseT = FALSE)
@@ -397,7 +562,6 @@ filtered_narrowpeak <- "PeakDirectory/filtered/Sorted_ATAC_50K_2_Small_Paired_fi
 export(MacsCalls, filtered_narrowpeak, format = "narrowPeak")
 
 #Annotating peaks to genes
-
 library(ChIPseeker)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 MacsCalls_Anno <- annotatePeak(MacsCalls, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene, annoDb = "org.Hs.eg.db")
@@ -488,8 +652,6 @@ for (chrName in seqnames(BSgenome.Hsapiens.UCSC.hg38)) {
   
   resList <- bplapply(mainChromosomes, scanChr, BPPARAM = bpparam)
   myRes <- do.call(c, resList)
-  
-  
   
   # Convert hits to GRanges if any found
   if (length(hits) > 0) {

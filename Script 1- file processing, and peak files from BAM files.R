@@ -107,7 +107,8 @@ Rsubread::align(index = "BSgenome.Hsapiens.UCSC.hg38.mainChrs",
 
 # type = 1 means genomic DNA-seq, whereas type = 0/"rna" is RNA-seq
 # Rsubread's default paired-end maximum fragment length is 600 bp
-
+#  To control maximum allowed fragment lengths, I set the maxFragLength parameter to 2000. 
+# I also set the unique parameter to TRUE to only include uniquely mapping reads
 
 bam.files <- list.files(pattern = ".BAM$", full.names = TRUE) 
 bam.files
@@ -119,9 +120,9 @@ indexBam("Sorted_ATAC_50K_2.bam")
 # Distribution of mapped reads
 # mappedReads <- idxstatsBam(sortedBAM)
 
+# Check the number of mapped reads on every chromosome using the idxstatsBam() function.
 mappedReads <- idxstatsBam("Sorted_ATAC_50K_2.bam")
 head(mappedReads)
-
 
 library(ggplot2)
 ggplot(mappedReads, aes(seqnames, mapped, fill = seqnames)) + geom_bar(stat = "identity") +
@@ -149,11 +150,10 @@ ggplot(mappedReads, aes(seqnames, mapped, fill = seqnames)) + geom_bar(stat = "i
 # Check the fraction of mapped reads originating from chrM.
 #
 # High mitochondrial content can indicate poor nuclear library
-# complexity.
+# Complexity.
 #
 # First quantify it.
-# Then decide whether mitochondrial reads should be removed
-# for downstream nuclear ATAC-seq analysis.
+# Then decide whether mitochondrial reads should be removed for downstream nuclear ATAC-seq analysis.
 
 chrM_reads <- mappedReads[
     mappedReads$seqnames == "chrM",
@@ -193,7 +193,7 @@ param_no_chrM <- ScanBamParam(
 #
 # Then use properly paired fragments for downstream
 # fragment-based analyses.
-library(GenomicAlignments)
+library(GenomicAlignments)                    
 flags = scanBamFlag(isProperPair = TRUE)
 myParam = ScanBamParam(flag = flags, what = c("qname", "mapq", "isize"), which = GRanges("chr20",
                                                                                          IRanges(1, 63025520)))
@@ -260,6 +260,17 @@ highQualityPairs <- atacReads[
 
 length(atacReads)
 length(highQualityPairs)
+                     
+# ============================================================
+#|    MAPQ | Interpretation         | Typical action      |   
+#| ------: | ---------------------- | ------------------- |
+#|       0 | Ambiguous/poor mapping | Remove              |
+#|     1–9 | Very low confidence    | Remove              |
+#|   10–19 | Low confidence         | Usually remove      |
+#|   20–29 | Moderate               | Depends on analysis |
+#| **≥30** | **High confidence**    | **Usually retain**  |
+#|     ≥40 | Very high confidence   | Retain              |
+# ============================================================
 
 # ============================================================
 # FRAGMENT-SIZE QC
@@ -410,9 +421,19 @@ ATACQC <- bamQC("Sorted_ATAC_50K_2_ch17.bam")
 names(ATACQC)
 
 #PCR bottleneck coefficients
+
+# PCR bottleneck coefficients identify PCR bias/overamplification which may have occurred in preparation of ATAC samples.
+# The "PCRbottleneckCoefficient_1" is calculated as the number of positions in the genome with exactly 1 read mapped uniquely compared to the number of positions with at least 1 read.
+# For example, if we have 20 reads. 16 map uniquely to locations. 4 do not map uniquely; instead, there are 2 locations, both of which have 2 reads. This would lead us to calculate 16/18. We therefore have a PBC1 of 0.889
+
+# ** Values less than 0.7 indicate severe bottlenecking; between 0.7 and 0.9 indicate moderate bottlenecking. Values greater than 0.9 show no bottlenecking. **
 ATACQC$PCRbottleneckCoefficient_1
 
-ATACQC$PCRbottleneckCoefficient_1
+# The "PCRbottleneckCoefficient_2" is our secondary measure of bottlenecking. 
+# It is calculated as the number of positions in the genome with exactly 1 read mapped uniquely compared to the number of positions with exactly 2 reads mapping uniquely.
+# We can reuse our example. If we have 20 reads, 16 of which map uniquely. 4 do not map uniquely; instead, there are 2 locations, both of which have 2 reads. This would lead us to calculate 16/2. We therefore have a PBC2 of 8.
+# ** Values less than 1 indicate severe bottlenecking, between 1 and 3 indicate moderate bottlenecking. Greater than 3 show no bottlenecking.
+ATACQC$PCRbottleneckCoefficient_2
 
 
 #Plotting signal over regions in R
@@ -458,7 +479,7 @@ seqlevels(tssLocations) <- mainChromosomes
 library(soGGi)
 sortedBAM <- "Sorted_ATAC_50K_2.bam"
 library(Rsamtools)
-# Nucleosome free
+# Nucleosome-free
 #bamFile parameter and a GRanges to plot over
 allSignal <- regionPlot(bamFile = sortedBAM, testRanges = tssLocations)
 
@@ -466,12 +487,20 @@ nucFree <- regionPlot(bamFile = sortedBAM, testRanges = tssLocations, style = "p
                       format = "bam", paired = TRUE, minFragmentLength = 0, maxFragmentLength = 100,
                       forceFragment = 50)
 class(nucFree)
-
 plotRegion(nucFree)
 
+# We can create a plot for our mono-nucleosome signal by adjusting our minFragmentLength and maxFragmentLength parameters those expected for nucleosome length fragments (here 180 to 240)
+monoNuc <- regionPlot(bamFile = sortedBAM, testRanges = tssLocations, style = "point",
+format = "bam", paired = TRUE, minFragmentLength = 180, maxFragmentLength = 240,
+forceFragment = 80)
+plotRegion(monoNuc) 
 
+                     
 # Peak calling for nucleosome-free regions
-# Single-end peak calling (With single-end sequencing from ATAC-seq, we do not know how long the fragments are. To identify open regions therefore requires some different parameters for MACS2 peak calling compared to ChIPseq. One strategy employed is to shift read 5’ ends by -100 and then extend from this by 200bp. Considering the expected size of our nucleosome free fragments this should provide a pile-up over nucelosome regions suitable for MACS2 window size.)
+# Single-end peak calling (With single-end sequencing from ATAC-seq, we do not know how long the fragments are. 
+# To identify open regions, therefore, requires some different parameters for MACS2 peak calling compared to ChIPseq.
+# One strategy employed is to shift read 5’ ends by -100 and then extend from this by 200bp. 
+# Considering the expected size of our nucleosome-free fragments, this should provide a pile-up over nucleosome regions suitable for MACS2 window size.)
 
 #MACS2 callpeak -t singleEnd.bam --nomodel --shift -100--extsize 200 --format BAM -g MyGenom
 
@@ -497,9 +526,8 @@ library(rtracklayer)
 library(DT)
 library(dplyr)
 library(tidyr)
+                     
 blkList <- import.bed("ENCFF356LFX.bed.gz")
-
-
 openRegionPeaks <- "D:/ATAC-seq/PeakDirectory/ATAC_50K_2/Sorted_ATAC_50K_2_Small_Paired_peaks.narrowPeak"
 
 # ============================================================
@@ -526,15 +554,16 @@ summary(qcRes)
 # Generate QC report
 ChIPQCreport(qcRes, reportName = "ATAC_QC", reportFolder = "QC_Report")
 
+#  Reads in peaks and reads in blacklist from the QCmetrics() function
 myMetrics <- QCmetrics(qcRes)
 myMetrics[c("RiBL%", "RiP%")]
 
+#  Number of duplicated reads from the flagtagcounts() function
 flgCounts <- flagtagcounts(qcRes)
 DupRate <- flgCounts["DuplicateByChIPQC"]/flgCounts["Mapped"]
 DupRate * 100
 
 #Remove blacklisted peaks
-
 library(GenomicRanges)
 library(rtracklayer)
 
@@ -561,6 +590,7 @@ filtered_narrowpeak <- "PeakDirectory/filtered/Sorted_ATAC_50K_2_Small_Paired_fi
 # Export filtered peaks (GRanges) to narrowPeak format
 export(MacsCalls, filtered_narrowpeak, format = "narrowPeak")
 
+                     
 #Annotating peaks to genes
 library(ChIPseeker)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
@@ -581,11 +611,10 @@ MacsCalls_Anno_df <- MacsCalls_Anno_df %>%
 # Write to Excel
 write.xlsx(MacsCalls_Anno_df, file = "Annotated_ATAC_Peaks1.xlsx", rowNames = FALSE)
 
-
 plotAnnoPie(MacsCalls_Anno)
 
 # Annotating nucleosome free regions
-# With this information we can then subset our peaks/nuc free regions to those only landing in TSS regions (+/- 500)
+# With this information, we can then subset our peaks/nuc free regions to those only landing in TSS regions (+/- 500)
 MacsGR_Anno <- as.GRanges(MacsCalls_Anno)
 MacsGR_TSS <- MacsGR_Anno[abs(MacsGR_Anno$distanceToTSS) < 500]
 MacsGR_TSS[1, ]

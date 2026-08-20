@@ -293,10 +293,10 @@ fragLenPlot + scale_y_continuous(trans = "log2") + geom_vline(xintercept = c(180
   geom_vline(xintercept = c(100), colour = "darkgreen") + theme_bw()
 
 # ============================================================
-# FRAGMENT-SIZE FILTERING
+# FRAGMENT-SIZE SUBSETTING
 # ============================================================
-# These filters are NOT general "bad-read" filters.
-# They separate biological fragment classes.
+# These are NOT quality-control cutoffs.
+# They classify fragments according to their insert size.
 #
 # Nucleosome-free:
 #   <100 bp
@@ -306,6 +306,9 @@ fragLenPlot + scale_y_continuous(trans = "log2") + geom_vline(xintercept = c(180
 #
 # Dinucleosome:
 #   315–437 bp
+#
+# These subsets can be used for downstream analyses of
+# nucleosome-free and nucleosome-associated signal
 #
 # Exact boundaries can be adjusted according to the observed
 # fragment-size distribution.
